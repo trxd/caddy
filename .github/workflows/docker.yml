@@ -1,0 +1,87 @@
+name: Docker
+
+on:
+  schedule:
+    - cron: '0 5 * * *' # everyday at 5am
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*.*.*'
+  pull_request:
+
+jobs:
+  release:
+    name: Build and push Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v2
+
+      - name: Prepare
+        id: prep
+        run: |
+          REPO=${GITHUB_REPOSITORY#*/}
+          DOCKER_IMAGE_NAME="$(echo ${{ secrets.DOCKER_TARGET }} | tr '[:upper:]' '[:lower:]')/$REPO"
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            DOCKER_IMAGE_VERSION=nightly
+          elif [[ $GITHUB_REF == refs/tags/* ]]; then
+            DOCKER_IMAGE_VERSION=${GITHUB_REF#refs/*/v}
+          elif [[ $GITHUB_REF == refs/heads/* ]]; then
+            DOCKER_IMAGE_VERSION=edge
+          elif [[ $GITHUB_REF == refs/pull/* ]]; then
+            DOCKER_IMAGE_VERSION=pr-${{ github.event.number }}
+          fi
+
+          if [[ -n "${{ secrets.UPSTREAM_VERSION }}" ]]; then
+            UPSTREAM_VERSION=${{ secrets.UPSTREAM_VERSION }}
+          else
+            UPSTREAM_VERSION="$(sh ./version.sh $(cat .repo))"
+          fi
+          if [[ -z "${UPSTREAM_VERSION}" ]]; then
+            exit 1
+          fi
+          TAGS="${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_VERSION},ghcr.io/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_VERSION}"
+          TAGS="${TAGS},${DOCKER_IMAGE_NAME}:${UPSTREAM_VERSION#v},ghcr.io/${DOCKER_IMAGE_NAME}:${UPSTREAM_VERSION#v}"
+          TAGS="${TAGS},${DOCKER_IMAGE_NAME}:latest,ghcr.io/${DOCKER_IMAGE_NAME}:latest"
+
+          echo ::set-output name=tags::${TAGS}
+          echo ::set-output name=args::"VERSION=${UPSTREAM_VERSION}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.prep.outputs.tags }}
+          build-args: ${{ steps.prep.outputs.args }}
+
+      - name: Logging
+        continue-on-error: true
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Build image at $(TZ=UTC date +'%Y/%m/%d')"
+          git push
