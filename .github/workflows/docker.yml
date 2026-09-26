@@ -1,0 +1,21 @@
+name: Docker
+
+on:
+  schedule:
+    - cron: '0 5 * * *' # everyday at 5am
+  push: {}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  docker:
+    name: Docker
+    uses: 'trxd/template/.github/workflows/docker.yml@main'
+    with:
+      upstream-version: ${{ vars.UPSTREAM_VERSION }}
+    secrets:
+      docker-username: ${{ secrets.DOCKER_USERNAME }}
+      docker-password: ${{ secrets.DOCKER_PASSWORD }}
+      github-pat: ${{ secrets.GHCR_PAT }}
